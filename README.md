@@ -58,6 +58,7 @@ Before using this action, you need to configure a Tailscale network for the runn
 
 <details>
 <summary>Click to view required Tailscale ACL configuration</summary>
+
 ```json
 {
   "grants": [
@@ -194,6 +195,6 @@ jobs:
       #   run: cachix push mycache --all
 ```
 
-## 📄 License
+## License
 
 This project is licensed under the [MIT License](LICENSE).
