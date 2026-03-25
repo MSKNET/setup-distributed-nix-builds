@@ -190,6 +190,10 @@ jobs:
           # Nix will automatically offload tasks to the correct architecture node.
           nix build -L --max-jobs 0 .#my-package
 
+      # Signal builders to terminate if they are not needed anymore
+      - name: Teardown Builders
+        run: stop-nix-builders
+
       # Push build results to Cachix/Attic or other cache here if desired
       # - name: Push to Cachix
       #   run: cachix push mycache --all

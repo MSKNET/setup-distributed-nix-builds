@@ -143,18 +143,17 @@ runs:
       env:
         INPUT_BUILDERS: ${{ inputs.builders }}
       run: |
-        echo "#!/bin/bash" > /tmp/teardown.sh
-        echo "BUILDERS=\"${INPUT_BUILDERS}\"" >> /tmp/teardown.sh
+        echo "#!/bin/bash" | sudo tee /usr/local/bin/stop-nix-builders
+        echo "if [ -f /tmp/.builders_stopped ]; then echo 'Builders already stopped.'; exit 0; fi" | sudo tee -a /usr/local/bin/stop-nix-builders
+        echo "BUILDERS=\"${INPUT_BUILDERS}\"" | sudo tee -a /usr/local/bin/stop-nix-builders
 
-        cat << 'EOF' >> /tmp/teardown.sh
+        cat << 'EOF' | sudo tee -a /usr/local/bin/stop-nix-builders
         echo "Coordinator: Tearing down builders gracefully..."
-
         for hostname in $BUILDERS; do
           echo "Initiating teardown for $hostname..."
           SUCCESS=false
-
           for i in {1..5}; do
-            if sudo ssh -o ConnectTimeout=10 root@$hostname "touch /tmp/builder_done"; then
+            if sudo ssh -o ConnectTimeout=10 root@$hostname "touch /tmp/builder_done" 2>/dev/null; then
               echo "Successfully sent teardown signal to $hostname."
               SUCCESS=true
               break
@@ -163,12 +162,15 @@ runs:
               sleep 3
             fi
           done
-
-          if [ "$SUCCESS" = false ]; then
-            echo "ERROR: Failed to teardown $hostname after 5 attempts. It will eventually hit the fallback timeout."
-          fi
         done
+        touch /tmp/.builders_stopped
+        EOF
 
+        sudo chmod +x /usr/local/bin/stop-nix-builders
+
+        cat << 'EOF' > /tmp/teardown.sh
+        #!/bin/bash
+        /usr/local/bin/stop-nix-builders
         echo "Coordinator: Logging out of Tailscale..."
         sudo $(which tailscale) logout || true
         EOF

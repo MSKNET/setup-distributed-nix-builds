@@ -152,3 +152,6 @@ jobs:
         run: |
           echo "Sleeping for ${{ inputs.debug_sleep_duration }} seconds for SSH debugging..."
           sleep ${{ inputs.debug_sleep_duration }}
+
+      - name: Teardown Builders
+        run: stop-nix-builders
