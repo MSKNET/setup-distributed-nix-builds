@@ -76,6 +76,11 @@ jobs:
           builders: ${{ needs.config.outputs.builders_list }}
           extra_nix_config: ${{ env.EXTRA_NIX_CONFIG }}
 
+      - name: Install Profiling Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dstat sysstat
+
       - name: Executing distributed builds
         env:
           RUN_SUFFIX: ${{ needs.config.outputs.run_suffix }}
@@ -85,67 +90,119 @@ jobs:
             nixpkgs = (builtins.getFlake "nixpkgs").legacyPackages;
             runSuffix = builtins.getEnv "RUN_SUFFIX";
 
-            systems =[ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
+            systems = [
+              "x86_64-linux"
+              "aarch64-linux"
+              "x86_64-darwin"
+              "aarch64-darwin"
+            ];
 
-            buildFor = system:
-              let pkgs = nixpkgs.${system}; in
-              pkgs.runCommand "builder-env-info-${system}-${runSuffix}" {
-                inherit runSuffix;
-              } ''
-                mkdir -p $out
-                INFO_FILE=$out/info.txt
+            # Number of concurrent tasks to send to EACH architecture
+            jobsPerSystem = 5;
 
-                echo "=== Nix Builder Environment Info ===" > $INFO_FILE
-                echo "Target System : ${system}" >> $INFO_FILE
-                echo "Uname         : $(uname -a)" >> $INFO_FILE
-                echo "Date          : $(date)" >> $INFO_FILE
-                echo "Architecture  : $(uname -m)" >> $INFO_FILE
+            buildFor =
+              system:
+              let
+                pkgs = nixpkgs.${system};
+              in
+              builtins.genList (
+                i:
+                pkgs.runCommand "info-${system}-${toString i}-${runSuffix}"
+                  {
+                    allowSubstitutes = false;
+                    inherit runSuffix;
+                  }
+                  ''
+                    mkdir -p $out
+                    INFO_FILE=$out/info.txt
+                    LOG_FILE=$out/log.txt
 
-                echo "Build Cores   : $NIX_BUILD_CORES" >> $INFO_FILE
-                if [ "$(uname -s)" = "Darwin" ]; then
-                  MEM_BYTES=$(/usr/sbin/sysctl -n hw.memsize 2>/dev/null || echo 0)
+                    echo "=== Nix Builder Environment Info ===" > $INFO_FILE
+                    echo "Target System : ${system}" >> $INFO_FILE
+                    echo "Task ID       : ${toString i}" >> $INFO_FILE
+                    echo "Uname         : $(uname -a)" >> $INFO_FILE
+                    echo "Date          : $(date)" >> $INFO_FILE
+                    echo "Architecture  : $(uname -m)" >> $INFO_FILE
 
-                  echo "CPU Model     : $(/usr/sbin/sysctl -n machdep.cpu.brand_string 2>/dev/null || echo 'Unknown')" >> $INFO_FILE
-                  echo "Total Memory  : $(( MEM_BYTES / 1073741824 )) GB" >> $INFO_FILE
-                elif [ -f /proc/cpuinfo ]; then
-                  CPU_MODEL=$(awk -F: '/^model name/ {print $2; exit}' /proc/cpuinfo | sed 's/^[ \t]*//')
-                  if [ -z "$CPU_MODEL" ]; then
-                    CPU_MODEL=$(awk -F: '/^Hardware/ {print $2; exit}' /proc/cpuinfo | sed 's/^[ \t]*//')
-                  fi
-                  if [ -z "$CPU_MODEL" ]; then
-                    CPU_IMPL=$(awk -F: '/^CPU implementer/ {print $2; exit}' /proc/cpuinfo | sed 's/^[ \t]*//')
-                    CPU_PART=$(awk -F: '/^CPU part/ {print $2; exit}' /proc/cpuinfo | sed 's/^[ \t]*//')
-                    if [ -n "$CPU_PART" ]; then
-                      CPU_MODEL="ARM (Impl: $CPU_IMPL, Part: $CPU_PART)"
+                    echo "Build Cores   : $NIX_BUILD_CORES" >> $INFO_FILE
+
+                    if [ "$(uname -s)" = "Darwin" ]; then
+                      MEM_BYTES=$(/usr/sbin/sysctl -n hw.memsize 2>/dev/null || echo 0)
+                      echo "CPU Model     : $(/usr/sbin/sysctl -n machdep.cpu.brand_string 2>/dev/null || echo 'Unknown')" >> $INFO_FILE
+                      echo "Total Memory  : $(( MEM_BYTES / 1073741824 )) GB" >> $INFO_FILE
+                    elif [ -f /proc/cpuinfo ]; then
+                      CPU_MODEL=$(awk -F: '/^model name/ {print $2; exit}' /proc/cpuinfo | sed 's/^[ \t]*//')
+                      if [ -z "$CPU_MODEL" ]; then
+                        CPU_MODEL=$(awk -F: '/^Hardware/ {print $2; exit}' /proc/cpuinfo | sed 's/^[ \t]*//')
+                      fi
+                      if [ -z "$CPU_MODEL" ]; then
+                        CPU_IMPL=$(awk -F: '/^CPU implementer/ {print $2; exit}' /proc/cpuinfo | sed 's/^[ \t]*//')
+                        CPU_PART=$(awk -F: '/^CPU part/ {print $2; exit}' /proc/cpuinfo | sed 's/^[ \t]*//')
+                        if [ -n "$CPU_PART" ]; then
+                          CPU_MODEL="ARM (Impl: $CPU_IMPL, Part: $CPU_PART)"
+                        fi
+                      fi
+                      [ -z "$CPU_MODEL" ] && CPU_MODEL="Unknown"
+                      echo "CPU Model     : $CPU_MODEL" >> $INFO_FILE
+                      echo "Total Memory  : $(awk '/MemTotal/ {printf "%.2f GB", $2/1024/1024}' /proc/meminfo 2>/dev/null || echo 'Unknown')" >> $INFO_FILE
                     fi
-                  fi
-                  [ -z "$CPU_MODEL" ] && CPU_MODEL="Unknown"
+                    echo "Store Space   : $(df -h /nix/store 2>/dev/null | tail -1 | awk '{print $4 " avail / " $2 " total"}' || echo 'Unknown')" >> $INFO_FILE
+                    echo "-----------------------------------" >> $INFO_FILE
 
-                  echo "CPU Model     : $CPU_MODEL" >> $INFO_FILE
-                  echo "Total Memory  : $(awk '/MemTotal/ {printf "%.2f GB", $2/1024/1024}' /proc/meminfo 2>/dev/null || echo 'Unknown')" >> $INFO_FILE
-                fi
+                    echo "Running heavy task ${toString i} on ${system}..." > $LOG_FILE
+                    dd if=/dev/urandom of=$out/payload.bin bs=1M count=50 status=none
 
-                echo "Store Space   : $(df -h /nix/store 2>/dev/null | tail -1 | awk '{print $4 " avail / " $2 " total"}' || echo 'Unknown')" >> $INFO_FILE
-                echo "-----------------------------------" >> $INFO_FILE
-              '';
+                    for j in {1..20}; do
+                      sha256sum $out/payload.bin > /dev/null
+                    done
+
+                    echo "Task ${toString i} completed." >> $LOG_FILE
+                  ''
+              ) jobsPerSystem;
+
+            # Flatten the nested lists into a single array of derivations
+            allTasks = nixpkgs.x86_64-linux.lib.flatten (map buildFor systems);
+
           in
-
-          nixpkgs.${builtins.currentSystem}.linkFarm "all-builder-infos-${runSuffix}" (
-            map (sys: { name = "info-${sys}"; path = buildFor sys; }) systems
+          nixpkgs.${builtins.currentSystem}.linkFarm "distributed-test-${runSuffix}" (
+            nixpkgs.x86_64-linux.lib.imap1 (i: task: {
+              name = "task-${toString i}";
+              path = task;
+            }) allTasks
           )
           EOF
 
+          echo "Starting dstat (system metrics) in background..."
+          dstat -tcmndy --tcp --output /tmp/dstat_metrics.csv 1 > /dev/null &
+          DSTAT_PID=$!
+
+          echo "Starting pidstat (process-level CPU monitor) in background..."
+          pidstat -C "ssh|nix" -u 1 > /tmp/pidstat_report.txt &
+          PIDSTAT_PID=$!
+
           echo "Starting remote multi-arch build..."
-          nix build -L --max-jobs 0 --impure -f test-build.nix
+          /usr/bin/time -v env NIX_SHOW_STATS=1 nix build -L --max-jobs 0 --impure -f test-build.nix
+
+          echo "Stopping profilers..."
+          kill $DSTAT_PID || true
+          kill $PIDSTAT_PID || true
 
           echo -e "\n\n🚀 Build completed! Checking results from distributed builders:"
-
-          for f in result/info-*/info.txt; do
+          for f in result/task-*/info.txt; do
             echo -e "\n============================================="
             echo "📄 Content of $f"
             echo "============================================="
             cat "$f"
           done
+
+      - name: Upload Profiling Artifacts
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: profiling-${{ needs.config.outputs.run_suffix }}
+          path: |
+            /tmp/dstat_metrics.csv
+            /tmp/pidstat_report.txt
 
       - name: Optional manual SSH debugging sleep
         if: ${{ inputs.debug_sleep_duration > 0 }}
