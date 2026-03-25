@@ -227,7 +227,15 @@ runs:
 
         # 2. Setup Remote Builder in Nix
         for hostname in $INPUT_BUILDERS; do
-          echo -e "Host $hostname\n  StrictHostKeyChecking no\n  UserKnownHostsFile /dev/null\n  BatchMode yes\n  LogLevel ERROR" | sudo tee -a /etc/ssh/ssh_config
+          cat << EOF | sudo tee -a /etc/ssh/ssh_config
+        Host $hostname
+          StrictHostKeyChecking no
+          UserKnownHostsFile /dev/null
+          BatchMode yes
+          LogLevel ERROR
+          Compression no
+          Ciphers aes128-gcm@openssh.com
+        EOF
         done
 
         for hostname in $INPUT_BUILDERS; do
@@ -253,7 +261,7 @@ runs:
 
           OPT_CORES=$((CORES * 2))
 
-          echo "ssh-ng://root@$hostname $SYSTEM - $OPT_CORES 1 $FEATURES" | sudo tee -a /etc/nix/machines
+          echo "ssh-ng://root@$hostname?compress=false $SYSTEM - $OPT_CORES 1 $FEATURES" | sudo tee -a /etc/nix/machines
         done
 
         echo "builders = @/etc/nix/machines" | sudo tee -a /etc/nix/nix.conf
